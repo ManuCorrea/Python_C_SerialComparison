@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <string.h>
+#include <string.h> // memset()
 
 // Linux headers
 #include <fcntl.h>   // Contains file controls like O_RDWR
@@ -22,6 +22,7 @@ void writeSerial(unsigned char msg)
     write(serial_port, buf, sizeof(msg));
 }
 
+// returns the number of written bytes
 int readSerial()
 {
     // set all buffer to \0
@@ -109,10 +110,9 @@ unsigned char *dataRequest()
             bytesRead = readSerial(); // el valor retornado debe ser > 0
             while (bytesRead != 0)    // Used to read all inputs values
             {
-                unsigned char resp = buf[bufIdx];
-                bufIdx += 1;
+                unsigned char resp = buf[bufIdx++];
                 // end data
-                if (resp == (unsigned char)0xFF)
+                if (resp == 0xFF)
                 {
                     return responses;
                 }
@@ -138,34 +138,40 @@ void nResponses(unsigned char msg)
 
     FD_ZERO(&rfds);
     FD_SET(serial_port, &rfds);
+
     // Asignamos 2 segundos de timeout para la función select()
     struct timeval tv;
     tv.tv_sec = 2;
     tv.tv_usec = 0;
 
-    while (idx != msg+2)
+    // We will receive the number of msgs told in the sent msg
+    while (idx != msg+1)
     {
+        // wait for some change in serial
         retval = select(serial_port + 1, &rfds, NULL, NULL, &tv);
         if (retval < 0)
         {
             puts("Error on select in dataRequest()");
         } else {
             readSerial();
-            while(idx < msg+2) {
+            while(idx < msg+1) {
                 
                 if ((unsigned char) buf[idx] == 0xFF){
                     return;
                 }
                 printf("msg: %x idx %d - 0x%02x \n", msg, idx, buf[idx]);
                 
-                if (buf[0] == (unsigned char) 0x11)
+                // if the msg is 0x11 we mark the idx with it
+                if (buf[idx] == (unsigned char) 0x11)
                 {
-                    nResponses[idx++] = buf[0];
+                    // TODO process nResponses array to check if everything was okay instead of printing all msgs
+                    nResponses[idx] = buf[idx];
                 }
                 else
                 {
                     printf("Fail %c respuesta %x\n", msg, buf[0]);
                 }
+                idx += 1;
             }
         }
     }
