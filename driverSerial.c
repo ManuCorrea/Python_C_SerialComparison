@@ -10,10 +10,19 @@
 
 #include <time.h> // Used to time functions
 
-#define PORT "/dev/ttyACM1"
+#define PORT "/dev/ttyACM0"
 
 int serial_port; // file descriptor del PORT
 char buf[128];
+
+void writeSerial(unsigned char msg);
+int readSerial();
+void orderAndAck();
+unsigned char *dataRequest();
+void nResponses(unsigned char msg);
+void nResponsesBenchmark(int nResponsesExecutions, int numberOfResponses);
+void closeAndOpen();
+double timeAvg(double times[], int nElements);
 
 void writeSerial(unsigned char msg)
 {
@@ -25,6 +34,10 @@ void writeSerial(unsigned char msg)
 // returns the number of written bytes
 int readSerial()
 {
+    /*
+    Reads PORT(defined above) file and save the results in buf array
+    returns: number of bytes that has been read from serial PORT.
+    */
     // set all buffer to \0
     memset(&buf, '\0', sizeof(buf));
     // n number of bytes read
@@ -34,16 +47,14 @@ int readSerial()
         printf("No bytes recived\n");
         return 0;
     }
-    else
-    {
-        // haddle input data
-        printf("Read %i bytes. First received message: %x\n", n, (unsigned char)buf[0]);
-    }
     return n;
 }
 
 void orderAndAck()
 {
+    /*
+    Function that sends 0x00 and check if it receives from microcontroller 0xAA
+    */
     // Orden 0x00 - ACK debe ser 0xAA
     writeSerial(0x00);
     fd_set rfds;
@@ -64,20 +75,31 @@ void orderAndAck()
     }
     else
     {
-        // TODO: gestionar si recibimos más de un dato por error
-        readSerial();
-        unsigned char resp = buf[0];
-        // si es diferente de 0xAA entonces hemos leido mal
-        printf("Leido: 0x%02X\n", (unsigned char)resp);
-        if (resp != (unsigned char)0xAA)
-        {
-            printf("Error, leido: 0x%02x\n", resp);
+        int nReadBytes = readSerial();
+        if (nReadBytes == 1) {
+            unsigned char resp = buf[0];
+            // si es diferente de 0xAA entonces hemos leido mal
+            printf("Leido: 0x%02X\n", (unsigned char)resp);
+            if (resp != (unsigned char)0xAA)
+            {
+                printf("Error, leido: 0x%02x\n", resp);
+            }
+        } else if (nReadBytes == 0) {
+            puts("No received data");
+        } else if (nReadBytes >= 2) {
+            puts("Received more than one byte");
+        } else {
+            puts("Leido un dato más del solicitado");
         }
     }
 }
 
 unsigned char *dataRequest()
 {
+    /*
+    Function to trigger 0x01 in microcontroller, it will ask for data
+    and micro will answer with 0xF0, 0xF2 and 0xFF to end
+    */
     // https://man7.org/linux/man-pages/man2/select.2.html
     fd_set rfds; // needed for select
     writeSerial(0x01); // we want 2 bytes answer
@@ -114,6 +136,7 @@ unsigned char *dataRequest()
                 // end data
                 if (resp == 0xFF)
                 {
+                    // return pointer to array
                     return responses;
                 }
                 else
@@ -129,6 +152,11 @@ unsigned char *dataRequest()
 
 void nResponses(unsigned char msg)
 {
+    /*
+    function to trigger n responses from microcontroller
+    args:
+    msg: must be bigger than 0x02 to trigger the microcontroller function 
+    */
     char nResponses[(int)msg];
     int idx = 0;
     writeSerial(msg);
@@ -144,37 +172,62 @@ void nResponses(unsigned char msg)
     tv.tv_sec = 2;
     tv.tv_usec = 0;
 
+    int totalRead = 0;
     // We will receive the number of msgs told in the sent msg
-    while (idx != msg+1)
+    // wait for some change in serial
+    retval = select(serial_port + 1, &rfds, NULL, NULL, &tv);
+    if (retval < 0)
     {
-        // wait for some change in serial
-        retval = select(serial_port + 1, &rfds, NULL, NULL, &tv);
-        if (retval < 0)
-        {
-            puts("Error on select in dataRequest()");
-        } else {
-            readSerial();
-            while(idx < msg+1) {
-                
-                if ((unsigned char) buf[idx] == 0xFF){
-                    return;
-                }
-                printf("msg: %x idx %d - 0x%02x \n", msg, idx, buf[idx]);
-                
-                // if the msg is 0x11 we mark the idx with it
-                if (buf[idx] == (unsigned char) 0x11)
-                {
-                    // TODO process nResponses array to check if everything was okay instead of printing all msgs
-                    nResponses[idx] = buf[idx];
-                }
-                else
-                {
-                    printf("Fail %c respuesta %x\n", msg, buf[0]);
-                }
-                idx += 1;
+        puts("Error on select in nResponses()");
+    } else {
+        int nBytes = readSerial(); // number of read bytes so we can know when to stop reading the buffer
+        // last idx we read serial
+        int lastRead = 0;
+
+        while(totalRead < msg+1) {
+            // We need to keep track if the idx is the same of number of read bytes
+            // we use totalRead as idx in the data storage array
+            if (idx == nBytes) {
+                idx = 0;
+                nBytes = readSerial();
             }
+
+            unsigned char resp = buf[idx]; // response
+            if (resp == (unsigned char) 0x11)
+            {
+                nResponses[totalRead] = buf[idx];
+            }
+            else if (resp == (unsigned char) 0xff)
+            {
+                printf("nResponses(%u) finalizado exitosamente\n", msg);
+            }
+            else
+            {
+                printf("Fail %u respuesta 0x%02x\n", msg, resp);
+            }
+            idx += 1;
+            totalRead += 1;
         }
     }
+}
+
+void nResponsesBenchmark(int nResponsesExecutions, int numberOfResponses){
+    /*
+    Function to test nResponses() time
+    args:
+    nResponsesExecutions: number of times we want to execute the function and then do the average
+    numberOfResponses: number of consecutives responses we want from the microcontroller
+    */
+    double nResponsesTimes[nResponsesExecutions];
+    for (int i = 0; i < nResponsesExecutions; i++) {
+        clock_t startTime = clock();
+        nResponses(numberOfResponses);
+        clock_t endTime = clock();
+        double elapsed = (double)(endTime-startTime) * (1000.0 / CLOCKS_PER_SEC);
+        nResponsesTimes[i] = elapsed;
+    }
+    int nElements = sizeof(nResponsesTimes)/sizeof(double);
+    printf("Average time for nResponses(%u): %f ms\n", numberOfResponses, timeAvg(nResponsesTimes, nElements));
 }
 
 void closeAndOpen()
@@ -273,19 +326,12 @@ int main()
         printf("Leido dataRequest: 0x%02X 0x%02X\n", p[0], p[1]);
     }
     nElements = sizeof(dataRequestTimes)/sizeof(double);
-    printf("Average time for orderAndAck: %f ms\n", timeAvg(dataRequestTimes, nElements));
+    printf("Average time for dataRequest(): %f ms\n", timeAvg(dataRequestTimes, nElements));
 
     puts("\n--------------------------\n");
     
-    int nResponsesExecutions = 1;
-    double nResponsesTimes[nResponsesExecutions];
-    for (int i = 0; i < nResponsesExecutions; i++) {
-        clock_t startTime = clock();
-        nResponses(10);
-        clock_t endTime = clock();
-        double elapsed = (double)(endTime-startTime) * 1000.0 / CLOCKS_PER_SEC;
-        nResponsesTimes[i] = elapsed;
-    }
-    nElements = sizeof(nResponsesTimes)/sizeof(double);
-    printf("Average time for orderAndAck: %f ms\n", timeAvg(nResponsesTimes, nElements));
+    nResponsesBenchmark(1, 20);
+    nResponsesBenchmark(1, 60);
+    nResponsesBenchmark(1, 100);
+    nResponsesBenchmark(1, 200);
 }
