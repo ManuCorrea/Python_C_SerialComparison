@@ -11,6 +11,7 @@
 #include <time.h> // Used to time functions
 
 #define PORT "/dev/ttyACM0"
+#define N_EXECUTIONS 100
 
 int serial_port; // file descriptor del PORT
 char buf[128];
@@ -20,7 +21,7 @@ int readSerial();
 void orderAndAck();
 unsigned char *dataRequest();
 void nResponses(unsigned char msg);
-void nResponsesBenchmark(int nResponsesExecutions, int numberOfResponses);
+double nResponsesBenchmark(int nResponsesExecutions, int numberOfResponses);
 void closeAndOpen();
 double timeAvg(double times[], int nElements);
 
@@ -211,12 +212,13 @@ void nResponses(unsigned char msg)
     }
 }
 
-void nResponsesBenchmark(int nResponsesExecutions, int numberOfResponses){
+double nResponsesBenchmark(int nResponsesExecutions, int numberOfResponses){
     /*
     Function to test nResponses() time
     args:
     nResponsesExecutions: number of times we want to execute the function and then do the average
     numberOfResponses: number of consecutives responses we want from the microcontroller
+    returns: average time taken in ms
     */
     double nResponsesTimes[nResponsesExecutions];
     for (int i = 0; i < nResponsesExecutions; i++) {
@@ -226,8 +228,9 @@ void nResponsesBenchmark(int nResponsesExecutions, int numberOfResponses){
         double elapsed = (double)(endTime-startTime) * (1000.0 / CLOCKS_PER_SEC);
         nResponsesTimes[i] = elapsed;
     }
-    int nElements = sizeof(nResponsesTimes)/sizeof(double);
-    printf("Average time for nResponses(%u): %f ms\n", numberOfResponses, timeAvg(nResponsesTimes, nElements));
+    float avgTime = timeAvg(nResponsesTimes, nResponsesExecutions);
+    printf("Average time for nResponses(%u): %f ms\n", numberOfResponses, avgTime);
+    return avgTime;
 }
 
 void closeAndOpen()
@@ -297,9 +300,10 @@ int main()
         printf("Error %i from tcsetattr: %s\n", errno, strerror(errno));
     }
 
-    int nElements;
+    FILE *dataFile;
+    dataFile = fopen("data/cData.txt", "w");
 
-    int orderAndAckNumExecutions = 5;
+    int orderAndAckNumExecutions = N_EXECUTIONS;
     double orderAndAckTimes[orderAndAckNumExecutions];
     for (int i = 0; i < orderAndAckNumExecutions; i++) {
         clock_t startTime = clock();
@@ -308,30 +312,30 @@ int main()
         double elapsed = (double)(endTime-startTime) * 1000.0 / CLOCKS_PER_SEC;
         orderAndAckTimes[i] = elapsed;
     }
-    nElements = sizeof(orderAndAckTimes)/sizeof(double);
-    printf("Average time for orderAndAck: %f ms\n", timeAvg(orderAndAckTimes, nElements));
-
+    float orderAndAckTime = timeAvg(orderAndAckTimes, orderAndAckNumExecutions);
+    printf("Average time for orderAndAck: %f ms\n", orderAndAckTime);
+    fprintf(dataFile, "%.2f\n", orderAndAckTime);
     puts("\n--------------------------\n");
 
     unsigned char *p;
     
-    int dataRequestExecutions = 10;
+    int dataRequestExecutions = N_EXECUTIONS;
     double dataRequestTimes[dataRequestExecutions];
     for (int i = 0; i < dataRequestExecutions; i++) {
         clock_t startTime = clock();
         p = dataRequest();
         clock_t endTime = clock();
-        double elapsed = (double)(endTime-startTime) * 1000.0 / CLOCKS_PER_SEC;
+        double elapsed = (double)(endTime-startTime) * (1000.0 / CLOCKS_PER_SEC);
         dataRequestTimes[i] = elapsed;
         printf("Leido dataRequest: 0x%02X 0x%02X\n", p[0], p[1]);
     }
-    nElements = sizeof(dataRequestTimes)/sizeof(double);
-    printf("Average time for dataRequest(): %f ms\n", timeAvg(dataRequestTimes, nElements));
-
+    float avgTimeDataRequest = timeAvg(dataRequestTimes, dataRequestExecutions);
+    printf("Average time for dataRequest(): %f ms\n", avgTimeDataRequest);
+    fprintf(dataFile, "%.2f\n", avgTimeDataRequest);
     puts("\n--------------------------\n");
     
-    nResponsesBenchmark(1, 20);
-    nResponsesBenchmark(1, 60);
-    nResponsesBenchmark(1, 100);
-    nResponsesBenchmark(1, 200);
+    fprintf(dataFile, "%.2f\n", nResponsesBenchmark(N_EXECUTIONS, 20));
+    fprintf(dataFile, "%.2f\n", nResponsesBenchmark(N_EXECUTIONS, 60));
+    fprintf(dataFile, "%.2f\n", nResponsesBenchmark(N_EXECUTIONS, 100));
+    fprintf(dataFile, "%.2f\n", nResponsesBenchmark(N_EXECUTIONS, 200));
 }
